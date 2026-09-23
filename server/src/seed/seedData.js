@@ -10,6 +10,7 @@ const AuditLog = require('../models/AuditLog');
 const { extractStructuredMedicalInformation } = require('../services/ai/extractionService');
 const { generateDoctorFacingSummary } = require('../services/ai/summaryService');
 const { checkRedFlags } = require('../services/clinical/redFlagService');
+const { seedClinicalGuidelines } = require('./seedGuidelines');
 
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -65,6 +66,9 @@ const seedDB = async () => {
     await MedicalReport.deleteMany({});
     await AuditLog.deleteMany({});
     console.log('[Seed] Cleared existing database records.');
+
+    // Ingest and embed WHO/ICMR clinical guidelines for RAG
+    await seedClinicalGuidelines();
 
     // 1. Create Doctor
     const doctor = await User.create({

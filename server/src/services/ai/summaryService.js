@@ -1,4 +1,4 @@
-﻿const aiProvider = require('./aiProvider');
+const aiProvider = require('./aiProvider');
 
 /**
  * Generate a doctor-facing clinical pre-consultation summary
@@ -36,6 +36,17 @@ const generateDoctorFacingSummary = async (patientUser, consultationData, struct
   summaryText += `• Symptom Course: ${progression}\n`;
   summaryText += `• Aggravating Factors: ${aggravating}\n`;
   summaryText += `• Relieving Factors: ${relieving}\n\n`;
+
+  if (Array.isArray(complaint.followUpQuestions) && complaint.followUpQuestions.length > 0) {
+    const answered = complaint.followUpQuestions.filter((f) => f.answer && f.answer.trim());
+    if (answered.length > 0) {
+      summaryText += `## Adaptive Follow-up Responses [Source: AI Clarification Intake]\n`;
+      answered.forEach((f) => {
+        summaryText += `• Q: ${f.question}\n  A: ${f.answer}\n`;
+      });
+      summaryText += `\n`;
+    }
+  }
 
   summaryText += `## Known Medical Conditions [Source: Patient Questionnaire & AI Structuring]\n`;
   if (Array.isArray(structuredData.conditions) && structuredData.conditions.length > 0 && structuredData.conditions[0] !== 'Not mentioned') {

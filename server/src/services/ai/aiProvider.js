@@ -1,4 +1,4 @@
-﻿const https = require('https');
+const https = require('https');
 
 /**
  * AI Provider Abstraction
@@ -83,6 +83,98 @@ class AIProvider {
       req.write(payload);
       req.end();
     });
+  }
+
+  /**
+   * Generate vector embeddings using Gemini text-embedding-004
+   * Falls back to a deterministic 768-dimensional normalized vector when key is unconfigured or offline
+   */
+  async generateEmbedding(text) {
+    if (!text || typeof text !== 'string') {
+      return this.createLocalDeterministicEmbedding('', 768);
+    }
+
+    if (this.hasExternalKey) {
+      try {
+        const payload = JSON.stringify({
+          model: 'models/text-embedding-004',
+          content: {
+            parts: [{ text: text.slice(0, 2048) }],
+          },
+        });
+
+        const options = {
+          hostname: 'generativelanguage.googleapis.com',
+          path: `/v1beta/models/text-embedding-004:embedContent?key=${this.apiKey}`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          },
+          timeout: 8000,
+        };
+
+        const result = await new Promise((resolve) => {
+          const req = https.request(options, (res) => {
+            let buf = '';
+            res.on('data', (c) => (buf += c));
+            res.on('end', () => {
+              try {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                  const data = JSON.parse(buf);
+                  if (data.embedding?.values && Array.isArray(data.embedding.values)) {
+                    return resolve(data.embedding.values);
+                  }
+                }
+                resolve(null);
+              } catch {
+                resolve(null);
+              }
+            });
+          });
+          req.on('error', () => resolve(null));
+          req.on('timeout', () => {
+            req.destroy();
+            resolve(null);
+          });
+          req.write(payload);
+          req.end();
+        });
+
+        if (result) return result;
+      } catch (err) {
+        console.warn('[AIProvider] Gemini embedding error:', err.message);
+      }
+    }
+
+    // Local deterministic pseudo-vector fallback (768 dimensions)
+    return this.createLocalDeterministicEmbedding(text, 768);
+  }
+
+  createLocalDeterministicEmbedding(text, dimensions = 768) {
+    const vector = new Array(dimensions).fill(0);
+    const normalized = (text || '').toLowerCase();
+
+    // Hash tokens into dimensions
+    const words = normalized.split(/\W+/).filter(Boolean);
+    if (words.length === 0) {
+      vector[0] = 1.0;
+      return vector;
+    }
+
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      let hash = 0;
+      for (let j = 0; j < word.length; j++) {
+        hash = (hash * 31 + word.charCodeAt(j)) & 0xffffffff;
+      }
+      const idx = Math.abs(hash) % dimensions;
+      vector[idx] += 1.0 / Math.sqrt(words.length);
+    }
+
+    // Unit normalize vector
+    const norm = Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0)) || 1;
+    return vector.map((v) => Number((v / norm).toFixed(6)));
   }
 }
 

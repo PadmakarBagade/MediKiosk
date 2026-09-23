@@ -1,4 +1,4 @@
-﻿import api from './api';
+import api from './api';
 
 export const submitConsultation = async (consultationData) => {
   const res = await api.post('/consultations', consultationData);
@@ -17,5 +17,10 @@ export const getConsultationById = async (id) => {
 
 export const updateConsultation = async (id, data) => {
   const res = await api.put(`/consultations/${id}`, data);
+  return res.data;
+};
+
+export const getAIFollowUpQuestions = async (chiefComplaint) => {
+  const res = await api.post('/ai/follow-up', { chiefComplaint });
   return res.data;
 };

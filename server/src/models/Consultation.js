@@ -38,6 +38,12 @@ const consultationSchema = new mongoose.Schema(
       severityScore: { type: Number, min: 1, max: 10, default: 5 },
       aggravatingFactors: { type: String, default: '' },
       relievingFactors: { type: String, default: '' },
+      followUpQuestions: [
+        {
+          question: { type: String, default: '' },
+          answer: { type: String, default: '' },
+        },
+      ],
     },
     medicalHistory: [
       {

@@ -21,6 +21,7 @@ import {
   Eye,
   Edit3,
   Stethoscope,
+  Sparkles,
   X
 } from 'lucide-react';
 
@@ -618,6 +619,23 @@ const DoctorPatientView = () => {
                   Duration: {consultation.chiefComplaint?.onsetDuration} • Severity: {consultation.chiefComplaint?.severityScore}/10 • Progression: {consultation.chiefComplaint?.progression}
                 </div>
               </div>
+
+              {consultation.chiefComplaint?.followUpQuestions && consultation.chiefComplaint.followUpQuestions.length > 0 && (
+                <div className="p-3 bg-purple-50/70 rounded-xl border border-purple-200 space-y-2">
+                  <span className="font-black text-purple-900 uppercase flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-purple-700" />
+                    AI Adaptive Follow-Up Questioning (Clinical Clarifications)
+                  </span>
+                  <div className="space-y-2">
+                    {consultation.chiefComplaint.followUpQuestions.map((fq, idx) => (
+                      <div key={idx} className="bg-white p-2.5 rounded-lg border border-purple-100 space-y-0.5">
+                        <div className="font-bold text-slate-900">• {fq.question}</div>
+                        <div className="text-slate-600 italic pl-3">{fq.answer || 'No response recorded'}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
                 <span className="font-bold text-slate-800 uppercase">Medical History Conditions</span>

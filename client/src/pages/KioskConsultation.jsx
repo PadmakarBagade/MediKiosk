@@ -7,7 +7,7 @@ import VoiceInput from '../components/VoiceInput';
 import ReportUpload from '../components/ReportUpload';
 import DisclaimerBanner from '../components/DisclaimerBanner';
 import SourceBadge from '../components/SourceBadge';
-import { submitConsultation } from '../services/consultationService';
+import { submitConsultation, getAIFollowUpQuestions } from '../services/consultationService';
 import {
   User,
   Activity,
@@ -53,6 +53,14 @@ const KioskConsultation = ({ isStandaloneKiosk = false, onKioskComplete = null }
     aggravatingFactors: '',
     relievingFactors: '',
   });
+
+  // Adaptive AI Follow-up Questions State
+  const [followUpQuestions, setFollowUpQuestions] = useState([]);
+  const [followUpAnswers, setFollowUpAnswers] = useState({});
+  const [groundedGuidelines, setGroundedGuidelines] = useState([]);
+  const [loadingFollowUp, setLoadingFollowUp] = useState(false);
+  const [followUpGeneratedFor, setFollowUpGeneratedFor] = useState('');
+  const [followUpError, setFollowUpError] = useState('');
 
   const [medicalHistory, setMedicalHistory] = useState([
     { id: 'diabetes', name: 'Diabetes (High Blood Sugar)', hasCondition: 'No', details: '' },
@@ -104,7 +112,35 @@ const KioskConsultation = ({ isStandaloneKiosk = false, onKioskComplete = null }
     }
   }, [profile]);
 
-  const handleNext = () => {
+  const fetchFollowUpQuestions = async (textToUse = null) => {
+    const text = (textToUse !== null ? textToUse : complaint.problem).trim();
+    if (!text || text.length < 3) return;
+    if (followUpGeneratedFor === text && followUpQuestions.length > 0) return;
+
+    setLoadingFollowUp(true);
+    setFollowUpError('');
+    try {
+      const res = await getAIFollowUpQuestions(text);
+      if (res.success && Array.isArray(res.questions)) {
+        setFollowUpQuestions(res.questions);
+        setGroundedGuidelines(res.groundedInGuidelines || []);
+        setFollowUpGeneratedFor(text);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch follow-up questions:', err);
+      setFollowUpError('Automated follow-up questions could not be loaded. You may proceed.');
+    } finally {
+      setLoadingFollowUp(false);
+    }
+  };
+
+  const handleNext = async () => {
+    // If on Step 2 and complaint is entered but follow-up questions haven't been generated yet,
+    // generate questions and pause on Step 2 so patient can answer them
+    if (step === 2 && complaint.problem.trim().length >= 3 && followUpQuestions.length === 0) {
+      await fetchFollowUpQuestions(complaint.problem.trim());
+      return;
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
     setStep((prev) => Math.min(prev + 1, 9));
   };
@@ -120,7 +156,13 @@ const KioskConsultation = ({ isStandaloneKiosk = false, onKioskComplete = null }
 
     try {
       const payload = {
-        chiefComplaint: complaint,
+        chiefComplaint: {
+          ...complaint,
+          followUpQuestions: followUpQuestions.map((q) => ({
+            question: q.question,
+            answer: followUpAnswers[q.id] || '',
+          })),
+        },
         medicalHistory: medicalHistory.map((m) => ({
           conditionName: m.name,
           hasCondition: m.hasCondition,
@@ -346,6 +388,122 @@ const KioskConsultation = ({ isStandaloneKiosk = false, onKioskComplete = null }
                   className="w-full p-3 rounded-xl border-2 border-slate-200 text-sm font-semibold"
                 />
               </div>
+            </div>
+
+            {/* AI Adaptive Follow-Up Questioning Section */}
+            <div className="pt-6 border-t-2 border-slate-100 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 p-4 rounded-2xl border border-purple-200/80">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                      <span>AI Adaptive Follow-Up Questions</span>
+                      <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-purple-200 text-purple-800">
+                        Clinical AI
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-600">
+                      Tailored clarifying questions generated dynamically from your chief complaint.
+                    </p>
+                    {groundedGuidelines.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          Grounded in:
+                        </span>
+                        {groundedGuidelines.map((g, i) => (
+                          <span
+                            key={i}
+                            className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-md bg-purple-100/90 text-purple-900 border border-purple-200"
+                            title={g.source}
+                          >
+                            <span>📚 {g.title}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {complaint.problem.trim().length >= 3 && (
+                  <button
+                    type="button"
+                    onClick={() => fetchFollowUpQuestions()}
+                    disabled={loadingFollowUp}
+                    className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-black shadow-xs transition flex items-center gap-1.5 self-start sm:self-auto disabled:opacity-50"
+                  >
+                    {loadingFollowUp ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>Generating...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>{followUpQuestions.length > 0 ? 'Regenerate Questions' : 'Generate Questions'}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+
+              {loadingFollowUp && (
+                <div className="p-6 rounded-2xl bg-purple-50/60 border border-purple-200 text-center space-y-2 animate-pulse">
+                  <Loader2 className="w-6 h-6 animate-spin text-purple-600 mx-auto" />
+                  <p className="text-xs font-bold text-purple-900">
+                    AI is reviewing your chief complaint and synthesizing clinical follow-up questions...
+                  </p>
+                </div>
+              )}
+
+              {followUpError && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                  {followUpError}
+                </div>
+              )}
+
+              {followUpQuestions.length > 0 && !loadingFollowUp && (
+                <div className="space-y-4 bg-slate-50/80 p-5 rounded-2xl border border-slate-200">
+                  <div className="text-xs font-black uppercase text-purple-800 tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                    <span>Please answer these 3 clarifying questions for the doctor:</span>
+                  </div>
+
+                  {followUpQuestions.map((q, idx) => (
+                    <div key={q.id || idx} className="space-y-2 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                      <label className="text-xs sm:text-sm font-extrabold text-slate-800 flex items-start gap-2.5">
+                        <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[11px] font-black flex items-center justify-center flex-shrink-0 mt-0.5">
+                          {idx + 1}
+                        </span>
+                        <span className="leading-snug">{q.question}</span>
+                      </label>
+                      <VoiceInput
+                        value={followUpAnswers[q.id] || ''}
+                        onChange={(val) => setFollowUpAnswers((prev) => ({ ...prev, [q.id]: val }))}
+                        placeholder="Type or tap the microphone to speak your answer..."
+                        rows={2}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {followUpQuestions.length === 0 && !loadingFollowUp && complaint.problem.trim().length >= 3 && (
+                <div className="p-4 rounded-2xl bg-slate-50 border-2 border-dashed border-purple-200 text-center space-y-2">
+                  <p className="text-xs text-slate-600 font-medium">
+                    Tap below to generate 3 tailored clinical follow-up questions based on your complaint.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => fetchFollowUpQuestions()}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-xs transition inline-flex items-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Generate AI Follow-Up Questions</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -810,6 +968,20 @@ const KioskConsultation = ({ isStandaloneKiosk = false, onKioskComplete = null }
                 <div className="text-xs text-slate-600">
                   Onset: {complaint.onsetDuration || 'Unspecified'} | Severity: {complaint.severityScore}/10 | Progression: {complaint.progression}
                 </div>
+                {followUpQuestions.length > 0 && (
+                  <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                    <span className="text-[11px] font-black uppercase text-purple-700 tracking-wider flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" />
+                      Adaptive Follow-Up Responses:
+                    </span>
+                    {followUpQuestions.map((q, idx) => (
+                      <div key={q.id || idx} className="text-xs text-slate-700 bg-white p-2 rounded-lg border border-slate-200">
+                        <div className="font-bold text-slate-900">• {q.question}</div>
+                        <div className="italic text-slate-600 mt-0.5">{followUpAnswers[q.id] || 'Not answered'}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
