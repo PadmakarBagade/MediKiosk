@@ -146,9 +146,56 @@ const getPatientFullHistory = async (req, res, next) => {
   }
 };
 
+// @desc    Update AI summary doctor-facing text and record provenance
+// @route   PUT /api/doctors/consultations/:id/summary
+const updateAiSummary = async (req, res, next) => {
+  try {
+    const { doctorFacingText } = req.body;
+    const consultation = await Consultation.findById(req.params.id);
+
+    if (!consultation) {
+      return res.status(404).json({ success: false, message: 'Consultation not found' });
+    }
+
+    if (!consultation.aiSummary) {
+      consultation.aiSummary = {};
+    }
+    consultation.aiSummary.doctorFacingText = doctorFacingText !== undefined ? doctorFacingText : consultation.aiSummary.doctorFacingText;
+
+    // Append source provenance tag for doctor verification
+    consultation.sourceProvenance.push({
+      field: 'aiSummary.doctorFacingText',
+      sourceType: 'doctor_verified',
+      sourceDetail: `Edited and validated by Dr. ${req.user.name}`,
+    });
+
+    await consultation.save();
+
+    await logAudit(req.user._id, 'doctor', 'UPDATE_AI_SUMMARY', 'Consultation', consultation._id.toString(), {
+      doctorName: req.user.name,
+      patientId: consultation.patientId.toString(),
+    });
+
+    const populatedConsultation = await Consultation.findById(consultation._id)
+      .populate('patientId', 'name email phone gender dateOfBirth emergencyContact')
+      .populate('doctorId', 'name medicalSpecialization medicalLicenseNumber')
+      .populate('uploadedReports')
+      .populate('doctorNotes.reviewedBy', 'name medicalSpecialization');
+
+    res.status(200).json({
+      success: true,
+      message: 'AI summary updated successfully.',
+      consultation: populatedConsultation,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getDoctorDashboardStats,
   getConsultationsQueue,
   reviewConsultation,
   getPatientFullHistory,
+  updateAiSummary,
 };

@@ -1,4 +1,4 @@
-﻿import api from './api';
+import api from './api';
 
 export const getDoctorStats = async () => {
   const res = await api.get('/doctors/stats');
@@ -12,6 +12,11 @@ export const getConsultationsQueue = async (status = 'all', search = '') => {
 
 export const reviewConsultation = async (consultationId, reviewData) => {
   const res = await api.post(`/doctors/consultations/${consultationId}/review`, reviewData);
+  return res.data;
+};
+
+export const updateAiSummary = async (consultationId, summaryData) => {
+  const res = await api.put(`/doctors/consultations/${consultationId}/summary`, summaryData);
   return res.data;
 };
 
