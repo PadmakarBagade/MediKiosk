@@ -504,6 +504,9 @@ const DoctorPatientView = () => {
                         {f.testName}
                       </div>
                       <div className="text-[10px] text-slate-400">Ref: {f.referenceRange}</div>
+                      {f.isCorrectedByPatient && (
+                        <div className="text-[10px] text-emerald-600 font-medium">✓ Patient Verified</div>
+                      )}
                     </div>
                     <div className="text-right">
                       <div className="font-black text-slate-900">

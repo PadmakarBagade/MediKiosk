@@ -1,4 +1,4 @@
-﻿const fs = require('fs');
+const fs = require('fs');
 const path = require('path');
 const pdfParse = require('pdf-parse');
 
@@ -165,39 +165,46 @@ const extractTextAndData = async (filePath, originalName) => {
       const pdfData = await pdfParse(dataBuffer);
       extractedText = pdfData.text || '';
     } else {
-      // For images (jpg, png)
-      // Read text if metadata or embedded, or apply simulated clean image text recognition
-      // Note: for production reliability in environments without Tesseract binary,
-      // we extract text or provide intelligent simulated clinical OCR based on file cues
-      extractedText = `[Medical Report Image: ${originalName}]\n`;
-      extractedText += `Patient Report Document Scan - Timestamp: ${new Date().toLocaleDateString()}\n`;
-      
-      const lower = originalName.toLowerCase();
-      if (lower.includes('cbc') || lower.includes('blood') || lower.includes('hemogram')) {
-        category = 'Complete Blood Count (CBC)';
-        extractedText += `Investigation: Complete Blood Count\nHemoglobin: 11.4 g/dL\nWBC: 9,200 /µL\nPlatelet Count: 2.4 lakh /µL\nRBC: 4.5 mill/µL\n`;
-      } else if (lower.includes('xray') || lower.includes('x-ray') || lower.includes('knee') || lower.includes('chest')) {
-        category = 'Radiology / Diagnostic Imaging';
-        extractedText += `Investigation: X-Ray Diagnostic Imaging\nFindings: Mild joint space narrowing visible. No acute bone fracture or dislocation.\nImpression: Consistent with degenerative changes. Clinical correlation advised.\n`;
-      } else if (lower.includes('sugar') || lower.includes('glucose') || lower.includes('diabetes')) {
-        category = 'Biochemistry / Glycemic Profile';
-        extractedText += `Investigation: Diabetic Profile\nFasting Blood Sugar: 154 mg/dL\nHbA1c: 7.8 %\nSerum Creatinine: 0.9 mg/dL\n`;
-      } else {
-        extractedText += `Clinical Lab Investigation Summary\nFindings documented in uploaded document.\nPlease verify values directly with original document.\n`;
+      // For images (jpg, png, etc.) - Apply real Tesseract OCR with sharp preprocessing
+      let inputForOcr = filePath;
+      try {
+        const sharp = require('sharp');
+        // Grayscale + contrast enhancement (normalize) for better OCR accuracy
+        inputForOcr = await sharp(filePath)
+          .grayscale()
+          .normalize()
+          .toBuffer();
+      } catch (sharpErr) {
+        console.warn(`[OCR Preprocessing Notice]: Sharp preprocessing skipped (${sharpErr.message}), using direct image file.`);
+        inputForOcr = filePath;
       }
+
+      const Tesseract = require('tesseract.js');
+      const { data } = await Tesseract.recognize(inputForOcr, 'eng');
+      extractedText = data?.text || '';
+    }
+
+    const lower = (extractedText + ' ' + originalName).toLowerCase();
+    if (lower.includes('cbc') || lower.includes('blood') || lower.includes('hemogram')) {
+      category = 'Complete Blood Count (CBC)';
+    } else if (lower.includes('xray') || lower.includes('x-ray') || lower.includes('knee') || lower.includes('chest') || lower.includes('radiology')) {
+      category = 'Radiology / Diagnostic Imaging';
+    } else if (lower.includes('sugar') || lower.includes('glucose') || lower.includes('diabetes') || lower.includes('hba1c')) {
+      category = 'Biochemistry / Glycemic Profile';
     }
 
     const findings = parseClinicalFindingsFromText(extractedText);
+    const hasFindings = findings.length > 0;
 
     return {
-      success: true,
+      success: hasFindings,
       extractedText: extractedText.trim(),
       extractedData: {
         testCategory: category,
         findings,
-        clinicalSummary: findings.length > 0 
+        clinicalSummary: hasFindings 
           ? `Extracted ${findings.length} diagnostic parameter(s) from ${originalName}.`
-          : 'Document text extracted. Manual doctor review recommended for complete interpretation.',
+          : 'Low-confidence or unformatted text. Zero clinical findings parsed. Manual verification recommended.',
       },
     };
   } catch (err) {

@@ -1,5 +1,5 @@
-﻿import React, { useState } from 'react';
-import { Upload, FileText, CheckCircle2, AlertCircle, Trash2, Edit2, Loader2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Upload, FileText, CheckCircle2, AlertCircle, Trash2, Edit2, Loader2, Plus, X } from 'lucide-react';
 import { uploadReportFile, correctReportData } from '../services/reportService';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -8,6 +8,8 @@ const ReportUpload = ({ reports = [], onReportsChange, consultationId = null, pa
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [editingFinding, setEditingFinding] = useState(null); // { reportId, findingIndex, value }
+  const [addingFindingFor, setAddingFindingFor] = useState(null); // reportId
+  const [manualForm, setManualForm] = useState({ testName: '', value: '', unit: '' });
 
   const handleFileSelect = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -50,13 +52,45 @@ const ReportUpload = ({ reports = [], onReportsChange, consultationId = null, pa
 
     try {
       const res = await correctReportData(reportId, { findings: newFindings });
-      if (res.success) {
+      if (res.success && res.report) {
         const updatedReports = reports.map((r) => (r._id === reportId ? res.report : r));
         onReportsChange(updatedReports);
         setEditingFinding(null);
       }
     } catch (e) {
       console.error('Failed to correct report value:', e);
+    }
+  };
+
+  const handleAddManualFinding = async (reportId) => {
+    if (!manualForm.testName.trim() || !manualForm.value.trim()) return;
+
+    const report = reports.find((r) => r._id === reportId);
+    if (!report) return;
+
+    const existingFindings = report.extractedData?.findings || [];
+    const newFindings = [
+      ...existingFindings,
+      {
+        testName: manualForm.testName.trim(),
+        value: manualForm.value.trim(),
+        unit: manualForm.unit.trim(),
+        referenceRange: 'Manually entered by patient',
+        status: 'Normal',
+        isCorrectedByPatient: true,
+      },
+    ];
+
+    try {
+      const res = await correctReportData(reportId, { findings: newFindings });
+      if (res.success && res.report) {
+        const updatedReports = reports.map((r) => (r._id === reportId ? res.report : r));
+        onReportsChange(updatedReports);
+        setAddingFindingFor(null);
+        setManualForm({ testName: '', value: '', unit: '' });
+      }
+    } catch (e) {
+      console.error('Failed to save manual finding:', e);
     }
   };
 
@@ -144,8 +178,12 @@ const ReportUpload = ({ reports = [], onReportsChange, consultationId = null, pa
                           : 'bg-rose-100 text-rose-800'
                       }`}
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      {rep.processingStatus}
+                      {rep.processingStatus === 'Failed' ? (
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                      ) : (
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                      )}
+                      {rep.processingStatus === 'Failed' ? 'Failed - Manual Review' : rep.processingStatus}
                     </span>
 
                     <button
@@ -159,18 +197,125 @@ const ReportUpload = ({ reports = [], onReportsChange, consultationId = null, pa
                   </div>
                 </div>
 
-                {/* Extracted Findings Table / Chips */}
-                {rep.extractedData?.findings && rep.extractedData.findings.length > 0 ? (
-                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                        {t('extractedValues')} (Click edit if OCR misread)
-                      </span>
-                      <span className="text-xs text-slate-400">
-                        Source: OCR Machine Reader
-                      </span>
+                {/* Graceful Low-Confidence / Zero Findings Alert */}
+                {rep.processingStatus === 'Failed' && (
+                  <div className="p-4 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl space-y-2">
+                    <div className="flex items-center gap-2 font-bold text-amber-800 text-sm">
+                      <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                      <span>Please verify these values manually</span>
                     </div>
+                    <p className="text-xs text-amber-700 leading-relaxed">
+                      Automatic OCR could not reliably detect structured clinical findings from this document. Please verify these values manually below using the manual entry form to ensure accurate records for your doctor.
+                    </p>
+                  </div>
+                )}
 
+                {/* Extracted Findings Table / Chips */}
+                <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      {t('extractedValues')} (Click edit if OCR misread)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (addingFindingFor === rep._id) {
+                          setAddingFindingFor(null);
+                        } else {
+                          setAddingFindingFor(rep._id);
+                          setManualForm({ testName: '', value: '', unit: '' });
+                        }
+                      }}
+                      className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 bg-emerald-100 hover:bg-emerald-200 px-2.5 py-1 rounded-lg transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Value Manually</span>
+                    </button>
+                  </div>
+
+                  {/* Manual Finding Entry Inline Form */}
+                  {addingFindingFor === rep._id && (
+                    <div className="bg-white p-4 rounded-xl border-2 border-emerald-400 shadow-sm space-y-3 animate-fadeIn">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-800 uppercase">
+                          Manual Clinical Value Entry
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setAddingFindingFor(null)}
+                          className="text-slate-400 hover:text-slate-600"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {/* Quick Lab Test Presets */}
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <span className="text-[11px] text-slate-400 font-medium">Quick Presets:</span>
+                        {[
+                          { name: 'Hemoglobin', unit: 'g/dL' },
+                          { name: 'Fasting Blood Sugar', unit: 'mg/dL' },
+                          { name: 'Platelet Count', unit: '/µL' },
+                          { name: 'Blood Pressure', unit: 'mmHg' },
+                          { name: 'Serum Creatinine', unit: 'mg/dL' },
+                        ].map((preset) => (
+                          <button
+                            key={preset.name}
+                            type="button"
+                            onClick={() =>
+                              setManualForm({ ...manualForm, testName: preset.name, unit: preset.unit })
+                            }
+                            className="text-[11px] font-medium px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 transition"
+                          >
+                            + {preset.name}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <input
+                          type="text"
+                          placeholder="Test Name (e.g. Hemoglobin)"
+                          value={manualForm.testName}
+                          onChange={(e) => setManualForm({ ...manualForm, testName: e.target.value })}
+                          className="text-xs p-2 border border-slate-300 rounded-lg outline-none focus:border-emerald-500"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Value (e.g. 12.5)"
+                          value={manualForm.value}
+                          onChange={(e) => setManualForm({ ...manualForm, value: e.target.value })}
+                          className="text-xs p-2 border border-slate-300 rounded-lg outline-none focus:border-emerald-500"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Unit (e.g. g/dL)"
+                          value={manualForm.unit}
+                          onChange={(e) => setManualForm({ ...manualForm, unit: e.target.value })}
+                          className="text-xs p-2 border border-slate-300 rounded-lg outline-none focus:border-emerald-500"
+                        />
+                      </div>
+
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setAddingFindingFor(null)}
+                          className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50 transition"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAddManualFinding(rep._id)}
+                          className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition"
+                        >
+                          Save Value (Verify)
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {rep.extractedData?.findings && rep.extractedData.findings.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                       {rep.extractedData.findings.map((finding, fIdx) => {
                         const isEditing =
@@ -259,12 +404,24 @@ const ReportUpload = ({ reports = [], onReportsChange, consultationId = null, pa
                         );
                       })}
                     </div>
-                  </div>
-                ) : (
-                  <div className="text-xs text-slate-500 bg-slate-50 p-3 rounded-xl">
-                    Report uploaded. Text extracted for physician review.
-                  </div>
-                )}
+                  ) : (
+                    <div className="text-xs text-slate-500 bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between">
+                      <span>No structured lab values found. Click "Add Value Manually" above to enter your values.</span>
+                    </div>
+                  )}
+
+                  {/* Raw OCR Text Expandable Inspection */}
+                  {rep.extractedText && (
+                    <details className="text-xs text-slate-500 pt-1">
+                      <summary className="cursor-pointer font-medium hover:text-slate-700 select-none">
+                        View Raw Extracted OCR Text
+                      </summary>
+                      <pre className="mt-2 p-3 bg-white rounded-xl text-[11px] overflow-x-auto whitespace-pre-wrap font-mono text-slate-700 max-h-36 border border-slate-200">
+                        {rep.extractedText}
+                      </pre>
+                    </details>
+                  )}
+                </div>
               </div>
             ))}
           </div>

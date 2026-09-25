@@ -1,4 +1,4 @@
-﻿const MedicalReport = require('../models/MedicalReport');
+const MedicalReport = require('../models/MedicalReport');
 const { extractTextAndData } = require('../services/ocr/ocrService');
 const { logAudit } = require('../middleware/auditMiddleware');
 
@@ -30,7 +30,8 @@ const uploadReport = async (req, res, next) => {
 
     report.extractedText = extractionResult.extractedText;
     report.extractedData = extractionResult.extractedData;
-    report.processingStatus = extractionResult.success ? 'Extracted' : 'Failed';
+    const hasFindings = extractionResult.success && extractionResult.extractedData?.findings?.length > 0;
+    report.processingStatus = hasFindings ? 'Extracted' : 'Failed';
     await report.save();
 
     await logAudit(req.user._id, req.user.role, 'UPLOAD_REPORT', 'MedicalReport', report._id.toString(), {

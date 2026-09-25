@@ -20,9 +20,10 @@ server/dist/
 # Uploaded files (patient documents — should not be in version control)
 server/uploads/
 
-# Logs
+# Logs & Cache
 *.log
 npm-debug.log*
+*.traineddata
 
 # OS files
 .DS_Store
