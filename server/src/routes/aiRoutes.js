@@ -9,6 +9,6 @@ const { protect } = require('../middleware/authMiddleware');
 
 router.post('/extract', protect, extractEntities);
 router.post('/summarize', protect, summarizeConsultation);
-router.post('/follow-up', getFollowUpQuestions);
+router.post('/follow-up', protect, getFollowUpQuestions);
 
 module.exports = router;
