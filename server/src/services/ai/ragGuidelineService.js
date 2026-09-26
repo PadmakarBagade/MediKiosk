@@ -62,11 +62,12 @@ async function searchRelevantGuidelines(chiefComplaintText, limit = 2) {
     ]);
 
     if (Array.isArray(atlasResults) && atlasResults.length > 0) {
+      console.log(`[RAG Guideline Service] Strategy 1 (Atlas $vectorSearch) succeeded! Retrieved ${atlasResults.length} guideline(s):`, atlasResults.map(g => g.title).join(', '));
       return atlasResults;
     }
   } catch (atlasErr) {
-    // Atlas $vectorSearch index not yet defined or running on local replica set
-    // Fall back smoothly to Strategy 2 (In-memory Cosine Similarity)
+    // Atlas $vectorSearch index not yet defined or building
+    console.warn(`[RAG Guideline Service] Strategy 1 (Atlas $vectorSearch) notice: ${atlasErr.message}. Falling back to Strategy 2 (In-memory Cosine Similarity)...`);
   }
 
   // Strategy 2: In-memory Cosine Similarity Ranking across ingested guidelines
@@ -84,6 +85,7 @@ async function searchRelevantGuidelines(chiefComplaintText, limit = 2) {
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
 
+    console.log(`[RAG Guideline Service] Strategy 2 (In-memory Cosine Similarity) completed. Retrieved ${ranked.length} guideline(s):`, ranked.map(g => g.title).join(', '));
     return ranked;
   } catch (err) {
     console.warn('[RAG Guideline Service] Error ranking guidelines:', err.message);
