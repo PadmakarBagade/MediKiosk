@@ -20,7 +20,21 @@ export const updateAiSummary = async (consultationId, summaryData) => {
   return res.data;
 };
 
-export const getPatientFullHistory = async (patientId) => {
-  const res = await api.get(`/doctors/patients/${patientId}/profile`);
+export const requestPatientAccess = async (patientId) => {
+  const res = await api.post(`/doctors/patients/${patientId}/request-access`);
+  return res.data;
+};
+
+export const verifyPatientAccess = async (patientId, otpCode) => {
+  const res = await api.post(`/doctors/patients/${patientId}/verify-access`, { otpCode });
+  return res.data;
+};
+
+export const getPatientFullHistory = async (patientId, accessToken = null) => {
+  const config = {};
+  if (accessToken) {
+    config.headers = { 'x-patient-access-token': accessToken };
+  }
+  const res = await api.get(`/doctors/patients/${patientId}/profile`, config);
   return res.data;
 };

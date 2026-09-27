@@ -2,7 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { getConsultationById } from '../services/consultationService';
-import { reviewConsultation, getPatientFullHistory, updateAiSummary } from '../services/doctorService';
+import {
+  reviewConsultation,
+  getPatientFullHistory,
+  updateAiSummary,
+  requestPatientAccess,
+  verifyPatientAccess,
+} from '../services/doctorService';
 import DisclaimerBanner from '../components/DisclaimerBanner';
 import SourceBadge from '../components/SourceBadge';
 import {
@@ -23,7 +29,14 @@ import {
   Stethoscope,
   Sparkles,
   X,
-  Loader2
+  Loader2,
+  Lock,
+  Unlock,
+  Key,
+  Smartphone,
+  RefreshCw,
+  AlertCircle,
+  ShieldCheck,
 } from 'lucide-react';
 
 const DoctorPatientView = () => {
@@ -48,9 +61,36 @@ const DoctorPatientView = () => {
   const [savingSummary, setSavingSummary] = useState(false);
   const [summarySaveSuccess, setSummarySaveSuccess] = useState(false);
 
+  // OTP 2FA Access Gate State
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [otpCodeInput, setOtpCodeInput] = useState('');
+  const [requestingOtp, setRequestingOtp] = useState(false);
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [otpError, setOtpError] = useState('');
+  const [otpInfo, setOtpInfo] = useState(null);
+  const [patientAccessToken, setPatientAccessToken] = useState(null);
+
   // Modals
   const [activeModal, setActiveModal] = useState(null); // 'report' | 'answers' | 'ocr'
   const [selectedReport, setSelectedReport] = useState(null);
+
+  const loadPatientHistoryWithToken = async (patientId, token) => {
+    try {
+      const histRes = await getPatientFullHistory(patientId, token);
+      if (histRes.success) {
+        setPatientHistory(histRes);
+        setPatientAccessToken(token);
+        return true;
+      }
+    } catch (err) {
+      if (err.response?.status === 403) {
+        setPatientHistory(null);
+        setPatientAccessToken(null);
+        sessionStorage.removeItem(`medikiosk_patient_token_${patientId}`);
+      }
+    }
+    return false;
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -66,10 +106,12 @@ const DoctorPatientView = () => {
             setNextSteps(res.consultation.doctorNotes.recommendedNextSteps || '');
           }
 
-          // Fetch full patient medical history
+          // Check if doctor has an active verified 2FA token in session for this patient
           if (res.consultation.patientId?._id) {
-            const histRes = await getPatientFullHistory(res.consultation.patientId._id);
-            if (histRes.success) setPatientHistory(histRes);
+            const cachedToken = sessionStorage.getItem(`medikiosk_patient_token_${res.consultation.patientId._id}`);
+            if (cachedToken) {
+              await loadPatientHistoryWithToken(res.consultation.patientId._id, cachedToken);
+            }
           }
         }
       } catch (e) {
@@ -80,6 +122,65 @@ const DoctorPatientView = () => {
     };
     fetchData();
   }, [id]);
+
+  const handleOpenOtpModal = async () => {
+    const patientId = consultation?.patientId?._id;
+    if (!patientId) return;
+
+    setShowOtpModal(true);
+    setOtpError('');
+    setOtpCodeInput('');
+    setRequestingOtp(true);
+
+    try {
+      const res = await requestPatientAccess(patientId);
+      if (res.success) {
+        setOtpInfo(res);
+      } else {
+        setOtpError(res.message || 'Failed to dispatch OTP code.');
+      }
+    } catch (err) {
+      setOtpError(err.response?.data?.message || 'Error communicating with OTP service.');
+    } finally {
+      setRequestingOtp(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e) => {
+    if (e) e.preventDefault();
+    const patientId = consultation?.patientId?._id;
+    if (!patientId || !otpCodeInput.trim()) return;
+
+    setVerifyingOtp(true);
+    setOtpError('');
+
+    try {
+      const res = await verifyPatientAccess(patientId, otpCodeInput.trim());
+      if (res.success && res.accessToken) {
+        sessionStorage.setItem(`medikiosk_patient_token_${patientId}`, res.accessToken);
+        setPatientAccessToken(res.accessToken);
+        await loadPatientHistoryWithToken(patientId, res.accessToken);
+        setShowOtpModal(false);
+        setOtpCodeInput('');
+        setOtpInfo(null);
+      } else {
+        setOtpError(res.message || 'Invalid or expired OTP code.');
+      }
+    } catch (err) {
+      setOtpError(err.response?.data?.message || 'Verification failed. Please check the code.');
+    } finally {
+      setVerifyingOtp(false);
+    }
+  };
+
+  const handleLockRecords = () => {
+    const patientId = consultation?.patientId?._id;
+    if (patientId) {
+      sessionStorage.removeItem(`medikiosk_patient_token_${patientId}`);
+    }
+    setPatientHistory(null);
+    setPatientAccessToken(null);
+  };
 
   const handleSaveReview = async () => {
     setSubmittingReview(true);
@@ -186,6 +287,28 @@ const DoctorPatientView = () => {
 
         {/* Action Button Strip */}
         <div className="flex items-center gap-2 flex-wrap">
+          {/* OTP 2FA Access Status / Unlock Button */}
+          {patientHistory ? (
+            <button
+              type="button"
+              onClick={handleLockRecords}
+              className="px-3.5 py-2 rounded-xl bg-emerald-50 text-emerald-800 hover:bg-emerald-100 font-bold text-xs border border-emerald-200 transition flex items-center gap-1.5"
+              title="Click to lock full records"
+            >
+              <Unlock className="w-4 h-4 text-emerald-600" />
+              <span>EHR Access: Verified (2FA)</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleOpenOtpModal}
+              className="px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs border border-indigo-200 transition flex items-center gap-1.5 shadow-xs"
+            >
+              <Lock className="w-4 h-4 text-indigo-600" />
+              <span>Unlock Full EHR (Patient OTP)</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => setActiveModal('answers')}
@@ -277,9 +400,22 @@ const DoctorPatientView = () => {
         <div className="lg:col-span-3 space-y-5">
           {/* Demographics Card */}
           <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-4">
-            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2">
-              <User className="w-4 h-4 text-emerald-600" />
-              Patient Profile
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-slate-400">
+                <User className="w-4 h-4 text-emerald-600" />
+                <span>Patient Profile</span>
+              </div>
+              {patientHistory ? (
+                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <ShieldCheck className="w-3 h-3" />
+                  2FA Verified
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <Lock className="w-3 h-3" />
+                  EHR Protected
+                </span>
+              )}
             </div>
 
             <div className="space-y-2 text-xs">
@@ -291,20 +427,29 @@ const DoctorPatientView = () => {
                 <span className="text-slate-500">Phone</span>
                 <span className="font-bold text-slate-800">{patient.phone || 'N/A'}</span>
               </div>
-              <div className="flex justify-between py-1 border-b border-slate-50">
-                <span className="text-slate-500">Blood Group</span>
-                <span className="font-black text-rose-700">{patientProfile.bloodGroup || 'Unknown'}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-50">
-                <span className="text-slate-500">Height / Weight</span>
-                <span className="font-bold text-slate-800">
-                  {patientProfile.height ? `${patientProfile.height} cm` : 'N/A'} • {patientProfile.weight ? `${patientProfile.weight} kg` : 'N/A'}
-                </span>
-              </div>
+
+              {patientHistory ? (
+                <>
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="text-slate-500">Blood Group</span>
+                    <span className="font-black text-rose-700">{patientProfile.bloodGroup || 'Unknown'}</span>
+                  </div>
+                  <div className="flex justify-between py-1 border-b border-slate-50">
+                    <span className="text-slate-500">Height / Weight</span>
+                    <span className="font-bold text-slate-800">
+                      {patientProfile.height ? `${patientProfile.height} cm` : 'N/A'} • {patientProfile.weight ? `${patientProfile.weight} kg` : 'N/A'}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="py-2 text-[11px] text-slate-400 italic">
+                  Extended clinical profile (Blood group, biometrics, emergency contact) locked behind patient 2FA.
+                </div>
+              )}
             </div>
 
-            {/* Emergency Contact */}
-            {patient.emergencyContact?.name && (
+            {/* Emergency Contact (Only if unlocked) */}
+            {patientHistory && patient.emergencyContact?.name && (
               <div className="pt-2 border-t border-slate-100 space-y-1">
                 <span className="text-[10px] font-bold text-slate-400 uppercase">
                   Emergency Contact
@@ -317,18 +462,51 @@ const DoctorPatientView = () => {
             )}
           </div>
 
-          {/* Past Consultations Timeline */}
-          {patientHistory?.previousConsultations && patientHistory.previousConsultations.length > 1 && (
+          {/* Privacy Locked EHR Gate Card (Shown when not yet unlocked) */}
+          {!patientHistory && (
+            <div className="bg-gradient-to-br from-indigo-50/90 to-purple-50/60 rounded-3xl p-5 border-2 border-indigo-200/80 shadow-xs space-y-3">
+              <div className="flex items-center gap-2.5 text-indigo-950">
+                <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black flex-shrink-0">
+                  <Lock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-black text-xs uppercase tracking-wider text-indigo-900">
+                    Full EHR History Protected
+                  </h4>
+                  <span className="text-[10px] text-indigo-600 block">
+                    Patient 2FA Authorization Required
+                  </span>
+                </div>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Access to complete historical consultations, past diagnostic records, and extended health profile requires one-time patient OTP consent.
+              </p>
+              <button
+                type="button"
+                onClick={handleOpenOtpModal}
+                className="w-full py-2.5 px-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white font-bold text-xs shadow-md shadow-indigo-600/20 transition flex items-center justify-center gap-2"
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>Request Patient Access OTP</span>
+              </button>
+            </div>
+          )}
+
+          {/* Past Consultations Timeline (Only shown when unlocked) */}
+          {patientHistory && patientHistory.previousConsultations && patientHistory.previousConsultations.length > 1 && (
             <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-3">
-              <div className="text-xs font-black uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-slate-500" />
-                Previous Visits ({patientHistory.previousConsultations.length})
+              <div className="text-xs font-black uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-2 flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Previous Visits ({patientHistory.previousConsultations.length})</span>
+                </div>
+                <span className="text-[10px] text-emerald-600 font-bold">Unlocked</span>
               </div>
 
               <div className="space-y-2 text-xs">
                 {patientHistory.previousConsultations
                   .filter((p) => p._id !== consultation._id)
-                  .slice(0, 3)
+                  .slice(0, 4)
                   .map((prev) => (
                     <Link
                       key={prev._id}
@@ -811,6 +989,131 @@ const DoctorPatientView = () => {
               >
                 Close Raw Answers
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= MODAL: Patient Access 2FA OTP Gate ================= */}
+      {showOtpModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 space-y-6 shadow-2xl animate-fadeIn border border-slate-100">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-base sm:text-lg">
+                    Patient EHR Access Authorization
+                  </h3>
+                  <span className="text-[11px] text-slate-400">
+                    2-Factor OTP Consent Gate (NDHM / HIPAA Compliant)
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowOtpModal(false);
+                  setOtpError('');
+                }}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="p-3.5 bg-indigo-50/70 border border-indigo-200 rounded-2xl space-y-1 text-xs text-indigo-950">
+                <div className="font-bold flex items-center gap-1.5 text-indigo-900">
+                  <Smartphone className="w-4 h-4 text-indigo-600 flex-shrink-0" />
+                  <span>Authorization Code Dispatched</span>
+                </div>
+                <p className="text-slate-600 leading-relaxed">
+                  {requestingOtp
+                    ? 'Dispatching 6-digit security code to patient phone...'
+                    : otpInfo?.message || `A 6-digit verification code was sent to the patient's registered mobile number (${patient.phone || 'on file'}).`}
+                </p>
+              </div>
+
+              {otpInfo?.devOtp && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-1">
+                  <div className="font-bold text-amber-800 flex items-center justify-between">
+                    <span>⚡ Demo / Testing Delivery:</span>
+                    <span className="text-[10px] text-amber-600 uppercase font-semibold">Simulated SMS</span>
+                  </div>
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="font-mono text-base font-black text-amber-950 tracking-widest bg-white px-2 py-0.5 rounded border border-amber-300">
+                      {otpInfo.devOtp}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setOtpCodeInput(otpInfo.devOtp)}
+                      className="text-xs font-bold text-indigo-600 hover:text-indigo-800 underline"
+                    >
+                      Auto-fill Code
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {otpError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl flex items-center gap-2 text-xs">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{otpError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleVerifyOtp} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block mb-1">
+                    Enter 6-Digit Verification Code
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={otpCodeInput}
+                    onChange={(e) => setOtpCodeInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="••••••"
+                    autoFocus
+                    className="w-full text-center text-3xl font-mono font-bold tracking-[0.4em] p-3 border-2 border-slate-300 focus:border-indigo-600 rounded-2xl outline-none transition bg-slate-50 text-slate-900"
+                  />
+                  <span className="text-[11px] text-slate-400 block text-center mt-1">
+                    Valid for 10 minutes • Issues temporary clinician access token
+                  </span>
+                </div>
+
+                <div className="flex gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenOtpModal}
+                    disabled={requestingOtp}
+                    className="px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 font-bold text-xs transition flex items-center justify-center gap-1.5"
+                  >
+                    {requestingOtp ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                    <span>Resend</span>
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={verifyingOtp || otpCodeInput.length < 6}
+                    className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-indigo-600/20 transition flex items-center justify-center gap-2"
+                  >
+                    {verifyingOtp ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Verifying...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Key className="w-4 h-4" />
+                        <span>Verify & Unlock Records</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>

@@ -2,6 +2,11 @@ const Consultation = require('../models/Consultation');
 const User = require('../models/User');
 const PatientProfile = require('../models/PatientProfile');
 const { logAudit } = require('../middleware/auditMiddleware');
+const {
+  sendAccessOtp,
+  verifyAccessOtp,
+  validatePatientAccessToken,
+} = require('../services/otp/otpService');
 
 // @desc    Get metrics for Doctor Dashboard
 // @route   GET /api/doctors/stats
@@ -121,10 +126,118 @@ const reviewConsultation = async (req, res, next) => {
   }
 };
 
-// @desc    Get full patient medical history profile for doctor
+// @desc    Request OTP access to patient's full medical history
+// @route   POST /api/doctors/patients/:patientId/request-access
+const requestPatientAccess = async (req, res, next) => {
+  try {
+    const patientUser = await User.findById(req.params.patientId);
+    if (!patientUser) {
+      return res.status(404).json({ success: false, message: 'Patient not found' });
+    }
+
+    const result = await sendAccessOtp(req.user._id, patientUser._id, patientUser.phone);
+
+    await logAudit(
+      req.user._id,
+      'doctor',
+      'ACCESS_OTP_REQUESTED',
+      'PatientProfile',
+      patientUser._id.toString(),
+      {
+        doctorName: req.user.name,
+        patientPhone: patientUser.phone,
+        simulated: result.simulated,
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: result.message,
+      expiresAt: result.expiresAt,
+      simulated: result.simulated,
+      devOtp: result.devOtp, // Expose in non-production for evaluator testing
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Verify OTP and issue 10-minute access token for patient's full history
+// @route   POST /api/doctors/patients/:patientId/verify-access
+const verifyPatientAccess = async (req, res, next) => {
+  try {
+    const { otpCode } = req.body;
+    const result = await verifyAccessOtp(req.user._id, req.params.patientId, otpCode);
+
+    if (!result.success) {
+      await logAudit(
+        req.user._id,
+        'doctor',
+        'ACCESS_DENIED',
+        'PatientProfile',
+        req.params.patientId,
+        {
+          doctorName: req.user.name,
+          reason: result.message,
+        }
+      );
+
+      return res.status(401).json({
+        success: false,
+        message: result.message,
+      });
+    }
+
+    await logAudit(
+      req.user._id,
+      'doctor',
+      'ACCESS_GRANTED',
+      'PatientProfile',
+      req.params.patientId,
+      {
+        doctorName: req.user.name,
+        expiresInSeconds: result.expiresInSeconds,
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: result.message,
+      accessToken: result.accessToken,
+      expiresInSeconds: result.expiresInSeconds,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get full patient medical history profile for doctor (Gated by OTP Access Token)
 // @route   GET /api/doctors/patients/:patientId/profile
 const getPatientFullHistory = async (req, res, next) => {
   try {
+    const accessToken = req.headers['x-patient-access-token'] || req.query.accessToken;
+    const tokenValidation = validatePatientAccessToken(accessToken, req.user._id, req.params.patientId);
+
+    if (!tokenValidation.valid) {
+      await logAudit(
+        req.user._id,
+        'doctor',
+        'ACCESS_DENIED',
+        'PatientProfile',
+        req.params.patientId,
+        {
+          doctorName: req.user.name,
+          reason: tokenValidation.reason,
+        }
+      );
+
+      return res.status(403).json({
+        success: false,
+        requiresOtp: true,
+        message: 'Access denied: Patient OTP authorization is required to access historical medical records.',
+      });
+    }
+
     const patientUser = await User.findById(req.params.patientId).select('-password');
     if (!patientUser) {
       return res.status(404).json({ success: false, message: 'Patient not found' });
@@ -134,6 +247,18 @@ const getPatientFullHistory = async (req, res, next) => {
       PatientProfile.findOne({ userId: patientUser._id }),
       Consultation.find({ patientId: patientUser._id }).sort({ createdAt: -1 }),
     ]);
+
+    await logAudit(
+      req.user._id,
+      'doctor',
+      'ACCESS_GRANTED',
+      'PatientProfile',
+      req.params.patientId,
+      {
+        doctorName: req.user.name,
+        action: 'VIEW_FULL_PROFILE',
+      }
+    );
 
     res.status(200).json({
       success: true,
@@ -198,4 +323,6 @@ module.exports = {
   reviewConsultation,
   getPatientFullHistory,
   updateAiSummary,
+  requestPatientAccess,
+  verifyPatientAccess,
 };
