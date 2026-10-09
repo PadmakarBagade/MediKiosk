@@ -1,143 +1,253 @@
 # MediKiosk: AI-Assisted Patient Pre-Consultation System (MERN Stack)
 
-MediKiosk is an AI-assisted healthcare pre-consultation kiosk web application designed to reduce the intake time doctors spend collecting basic patient history.
+MediKiosk is an AI-assisted pre-consultation kiosk for busy hospital OPDs, where doctors often get only 2-5 minutes per patient. Patients record their medical history by touch or multilingual voice before meeting the doctor, upload old reports, and MediKiosk turns everything into a structured, source-tagged summary for the physician. Doctor access to a patient's full record is protected by OTP-based patient consent.
 
-Patients interact with MediKiosk via touchscreen or multilingual voice input before meeting the physician. The system gathers patient complaints, medical history, medications, allergies, and lifestyle factors, accepts uploads of previous diagnostic reports (PDF/images), extracts clinical findings with OCR, organizes structured data, and compiles a concise **doctor-facing pre-consultation summary**.
-
-> [!IMPORTANT]
-> **Clinical Safety Principle**: MediKiosk does **not** diagnose medical conditions or prescribe medications. AI-synthesized summaries are explicitly presented as clinical decision-support tools for registered healthcare professionals, who remain solely responsible for diagnosis, examination, and treatment.
+> **Clinical Safety Principle:** MediKiosk does not diagnose conditions or prescribe medications. AI-generated summaries are decision-support drafts for registered healthcare professionals, who remain solely responsible for diagnosis, examination, and treatment.
 
 ---
 
-## 🚀 Quick Start (Local Setup)
+## Key Features
+
+| Area | What it does |
+|---|---|
+| **Guided intake** | 9-step touch/voice questionnaire (complaint, history, medications, allergies, lifestyle, reports, review) |
+| **Multilingual voice input** | English, Hindi, Marathi via the browser Web Speech API, with keyboard fallback |
+| **Red-flag detection** | Rule-based emergency symptom detection (cardiac, stroke, bleeding, altered consciousness, airway, acute abdomen, psychiatric crisis). Flagged patients are sorted to the top of the doctor's queue and counted on the dashboard |
+| **RAG-grounded follow-up questions** | Retrieves relevant WHO/ICMR-style clinical guideline snippets (vector search) and uses them to generate tailored follow-up questions. The UI shows which guideline grounded the questions |
+| **Document digitization (OCR)** | PDFs parsed with `pdf-parse`; images preprocessed with `sharp` and read with `tesseract.js`. Lab values (Hb, WBC, platelets, FBS, HbA1c, creatinine, bilirubin, BP) are extracted and flagged Normal/High/Low |
+| **Low-confidence handling** | Unreadable scans are marked "Failed" and the patient is asked to verify or correct values manually |
+| **AI summary** | Structured pre-consultation summary with source tags: `[Patient Reported]`, `[Report OCR]`, `[AI Structured]`, `[Doctor Verified]`. Rule-based engine always runs; Gemini refines it when available |
+| **Doctor-editable summary** | Doctors can edit the AI summary directly; edits are tagged `doctor_verified` |
+| **OTP doctor-access gate** | A doctor must request and verify a one-time code (sent to the patient's phone) before viewing a full patient history. Access is a short-lived (10 min) scoped token |
+| **ABHA login (ABDM sandbox, M1)** | Patients can create or log in to an ABHA (Ayushman Bharat Health Account) using Aadhaar OTP against the ABDM sandbox |
+| **Audit logging** | Logins, record access, OTP requests/grants/denials, consultations, reviews, and uploads are logged |
+| **Kiosk privacy** | 75-second idle detector with a 15-second countdown purges patient state between patients |
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 18, Vite, Tailwind CSS |
+| Backend | Node.js, Express 4 |
+| Database | MongoDB (Atlas or local) via Mongoose 8 |
+| Auth | JWT (`jsonwebtoken`) + `bcryptjs` |
+| LLM & embeddings | Google Gemini (`text-embedding-004` for embeddings), with local fallbacks when no API key is set |
+| Vector search | MongoDB Atlas `$vectorSearch`, falling back to in-memory cosine similarity |
+| OCR | `tesseract.js` + `sharp` (images), `pdf-parse` (PDFs) |
+| OTP / SMS | Twilio REST API, with simulated console-logged fallback |
+| Identity | ABDM Sandbox APIs (ABHA, Milestone 1) |
+| Voice | Browser Web Speech API |
+| Uploads | `multer` |
+
+---
+
+## Quick Start (Local Setup)
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) (v18 or higher)
-- [MongoDB](https://www.mongodb.com/) running locally on `mongodb://127.0.0.1:27017`
+- Node.js v18 or higher
+- A MongoDB database: either a free [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) cluster (recommended) or a local MongoDB on `127.0.0.1:27017`
 
-### 1. Install Dependencies
-Run from the root directory:
+### 1. Install dependencies
+From the root directory:
 ```bash
 npm run install:all
 ```
-*(Or install in `server` and `client` individually via `npm install` in each directory)*
 
-### 2. Configure Environment Variables
-Copy `.env.example` to `server/.env`:
+### 2. Configure environment variables
+Copy `.env.example` to `server/.env` and fill in your values:
+
 ```env
 PORT=5000
 NODE_ENV=development
-MONGO_URI=mongodb://127.0.0.1:27017/medikiosk
-JWT_SECRET=medikiosk_super_secure_jwt_secret_key_2026_dev
+MONGO_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/medikiosk?retryWrites=true&w=majority
+JWT_SECRET=change_this_to_a_long_random_string
 CLIENT_URL=http://localhost:5173
 
-# Optional: Set Gemini API key for external LLM inference.
-# If omitted, MediKiosk automatically runs its built-in clinical NLP extraction & summarizer engine.
+# Optional: Gemini API key. If omitted, built-in rule-based engines are used.
 GEMINI_API_KEY=
-```
 
-### 3. Seed Demo Data
-Populate the database with realistic test cases (1 doctor and 3 patients with clinical histories, lab reports, and consultations):
+# Optional: Twilio SMS for OTP. If omitted, OTP is logged to the server console (simulated mode).
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_PHONE_NUMBER=
+SMS_SENDER_ID=MEDIKIOSK
+
+# ABDM sandbox credentials (use the variable names your abhaService expects)
+ABDM_CLIENT_ID=
+ABDM_CLIENT_SECRET=
+```
+**Never commit `server/.env`.** It is excluded by `.gitignore`.
+
+For a local MongoDB, use `MONGO_URI=mongodb://127.0.0.1:27017/medikiosk`.
+
+### 3. Seed data
 ```bash
-npm run seed
+npm run seed                          # demo doctor, patients, reports, consultations
+npm run seed:guidelines --prefix server   # clinical guidelines + embeddings for RAG
 ```
 
-### 4. Run Development Servers
-Start both backend (Express on port `5000`) and frontend (Vite on port `5173`) concurrently:
+### 4. (Recommended) Create the Atlas Vector Search index
+Without this index, RAG still works through the in-memory fallback, but this enables true vector search.
+- Atlas → your cluster → **Search** → **Create Search Index** → **Atlas Vector Search**
+- Collection: `clinicalguidelines` · Field: `embedding` · Dimensions: `768` · Similarity: `cosine`
+- Index name: `clinical_guidelines_vector_index`
+
+When you submit a complaint, the server log shows which strategy served the request (Atlas `$vectorSearch` or in-memory fallback).
+
+### 5. Run the app
 ```bash
 npm run dev
 ```
-
-Open your browser and navigate to:
-```
-http://localhost:5173
-```
+Open `http://localhost:5173` (backend runs on port 5000).
 
 ---
 
-## 👥 Demo Accounts (1-Click Login Available)
+## Demo Accounts (1-click login on the login page)
 
-| Role | Name | Email | Password | Case Details |
-| :--- | :--- | :--- | :--- | :--- |
-| **Doctor** | Dr. Sarah Sharma | `doctor@medikiosk.com` | `Doctor@123` | Internal Medicine Physician (Reg #MCI-2018-84729) |
-| **Patient 1** | Rahul Verma (45M) | `rahul@medikiosk.com` | `Patient@123` | Fever & cough, Hypertension, CBC lab report (Pending Review) |
-| **Patient 2** | Sunita Patel (62F) | `sunita@medikiosk.com` | `Patient@123` | Knee pain, Type 2 Diabetes, Glycemic & X-ray report (Pending Review) |
-| **Patient 3** | Amit Joshi (29M) | `amit@medikiosk.com` | `Patient@123` | Headache, Penicillin allergy (Reviewed with Doctor Notes) |
+| Role | Name | Email | Password | Case |
+|---|---|---|---|---|
+| Doctor | Dr. Sarah Sharma | doctor@medikiosk.com | Doctor@123 | Internal Medicine (Reg #MCI-2018-84729) |
+| Patient 1 | Rahul Verma (45M) | rahul@medikiosk.com | Patient@123 | Fever & cough, hypertension, CBC report (Pending Review) |
+| Patient 2 | Sunita Patel (62F) | sunita@medikiosk.com | Patient@123 | Knee pain, Type 2 diabetes, glycemic & X-ray report (Pending Review) |
+| Patient 3 | Amit Joshi (29M) | amit@medikiosk.com | Patient@123 | Headache, penicillin allergy (Reviewed) |
 
-*Note: The login page includes quick 1-click buttons that automatically populate credentials for instant testing.*
+> **Testing the OTP gate without Twilio:** when Twilio is not configured, the OTP is printed in the backend console (and returned as `devOtp` outside production mode).
 
 ---
 
-## 🖥️ Key Application Workflows
+## Application Workflows
 
 ### 1. Standalone Kiosk Mode (`/kiosk`)
-- Designed for tablet or touchscreen kiosks in clinic waiting rooms.
-- High-contrast UI, extra-large touch buttons, minimal navigation distractions.
-- **Multilingual Support**: Switch seamlessly between **English**, **Hindi (हिन्दी)**, and **Marathi (मराठी)**.
-- **Voice Dictation**: Web Speech API integration with active pulsing animation, live preview, retry, and keyboard fallback.
-- **Inactivity Protection**: 75-second idle detector with a 15-second visual countdown modal that purges patient state to prevent data leakage between patients.
+- Built for tablets and touchscreens in waiting rooms: high-contrast UI, large touch targets, minimal navigation.
+- Languages: English, Hindi (हिन्दी), Marathi (मराठी).
+- Voice dictation with live preview, retry, and keyboard fallback.
+- 75-second idle detector with a 15-second countdown purges patient state to prevent data leakage between patients.
 
-### 2. Guided 9-Step Intake Flow
-1. **Personal Information**: Identity & emergency contact confirmation.
-2. **Main Complaint**: Chief problem (voice enabled), duration, course (better/worse/same), severity slider (1-10), relieving/aggravating factors.
-3. **Medical History**: Structured conditions (Diabetes, BP, Heart, Asthma, Kidney, Surgeries, Hospitalizations) with `Yes`/`No`/`Not sure` and conditional detail prompts.
-4. **Medications**: Name, dosage, frequency, reason, with a `"I don't know my medicines"` button.
-5. **Allergies**: Drug, food, and environmental allergy tracking with reaction descriptions.
-6. **Lifestyle**: Smoking, alcohol, physical activity, sleep hours, diet, and occupation.
-7. **Previous Reports**: Drag-and-drop file uploader (PDF, JPG, PNG) with instant OCR extraction of lab values.
-8. **Review & Correct**: Patient reviews all answers and OCR numbers, with full editing capabilities.
-9. **Handover**: Secure submission to clinician workstation with clear waiting room instructions.
+### 2. Guided 9-Step Intake
+1. **Personal information:** identity and emergency contact
+2. **Main complaint:** problem (voice enabled), duration, course, severity (1-10), relieving/aggravating factors. **Red-flag check runs here, and AI follow-up questions grounded in clinical guidelines are generated**
+3. **Medical history:** structured conditions with Yes/No/Not sure
+4. **Medications:** name, dose, frequency, reason, or "I don't know my medicines"
+5. **Allergies:** drug, food, environmental
+6. **Lifestyle:** smoking, alcohol, activity, sleep, diet, occupation
+7. **Previous reports:** drag-and-drop PDF/JPG/PNG with real OCR extraction
+8. **Review & correct:** edit all answers and OCR values
+9. **Handover:** secure submission with waiting-room instructions
 
-### 3. Doctor Consultation Workstation (`/doctor/consultation/:id`)
-- **Left Column**: Patient demographics, vitals, blood group, emergency contacts, and visit timeline.
-- **Center Column**: AI-synthesized pre-consultation summary with clear clinical sections, verification flags, and source tags (`[Patient Reported]`, `[Report OCR]`, `[AI Structured]`, `[Doctor Verified]`).
-- **Right Column**: High-priority alert panel (Allergies in red, Current prescription meds, Abnormal lab parameters).
-- **Tools**:
-  - View original report text and files.
-  - View raw patient questionnaire answers.
-  - Add physician examination findings, differential diagnosis considerations, and next steps.
-  - One-click "Mark as Reviewed" status update.
+### 3. Doctor Workflow
+1. Log in and open the dashboard (stats, search by name/complaint, **red-flag cases first**).
+2. Open a patient and **request access**. A one-time code goes to the patient's phone.
+3. Enter the code to unlock the record for 10 minutes. Failed and successful attempts are audit-logged.
+4. Review the three-column workstation:
+   - **Left:** demographics, vitals, blood group, emergency contacts, visit timeline
+   - **Center:** AI summary with sections, verification flags, and source tags. **Doctors can edit and save the summary**
+   - **Right:** priority alerts (allergies, current medications, abnormal labs)
+5. Add examination findings, differential considerations, and next steps, then **Mark as Reviewed**.
+
+### 4. ABHA Login (Patients)
+Aadhaar number → Aadhaar OTP → ABHA number and address returned and linked to the patient account. Existing email/password login remains available. This uses the **ABDM sandbox** (Milestone 1: ABHA creation and verification).
 
 ---
 
-## 🏛️ System Architecture
+## System Architecture
 
 ```
 medikiosk/
-├── package.json              # Monorepo root (concurrently dev & build scripts)
-├── README.md                 # Setup guide & documentation
-├── .env.example              # Environment variables template
+├── package.json                  # Monorepo root (concurrent dev/build scripts)
+├── README.md
+├── .env.example
 ├── server/
 │   ├── src/
-│   │   ├── config/db.js      # MongoDB Mongoose connection
-│   │   ├── models/           # User, PatientProfile, Consultation, MedicalReport, AuditLog
-│   │   ├── middleware/       # JWT auth, Multer file upload, Audit logging, Error handling
+│   │   ├── config/db.js          # MongoDB connection
+│   │   ├── models/               # User, PatientProfile, Consultation, MedicalReport,
+│   │   │                         # AuditLog, ClinicalGuideline, AccessOtp
+│   │   ├── middleware/           # JWT auth, upload (Multer), audit logging, error handling
 │   │   ├── services/
-│   │   │   ├── ocr/          # PDF & Image text/lab extractor (pdf-parse & clinical parser)
-│   │   │   └── ai/           # AI Provider (Gemini API + zero-downtime clinical NLP fallback)
-│   │   ├── controllers/      # Auth, Patient, Doctor, Consultation, Report, AI
-│   │   ├── routes/           # REST endpoints
-│   │   └── seed/seedData.js  # Realistic clinical demo database seeder
-│   └── uploads/              # Uploaded patient medical reports directory
+│   │   │   ├── ai/               # aiProvider (Gemini + fallbacks), extraction, summary,
+│   │   │   │                     # followUpService, ragGuidelineService
+│   │   │   ├── clinical/         # redFlagService (rule-based emergency detection)
+│   │   │   ├── ocr/              # ocrService (pdf-parse, sharp, tesseract.js, lab parser)
+│   │   │   ├── otp/              # otpService (Twilio + simulated fallback)
+│   │   │   └── abdm/             # abhaService (ABDM sandbox: session, encryption, OTP)
+│   │   ├── controllers/          # Auth, Patient, Doctor, Consultation, Report, AI
+│   │   ├── routes/               # REST endpoints
+│   │   └── seed/                 # seedData.js, seedGuidelines.js
+│   └── uploads/                  # Uploaded patient reports (git-ignored)
 └── client/
-    ├── src/
-    │   ├── i18n/             # English, Hindi, and Marathi dictionaries
-    │   ├── context/          # AuthContext & LanguageContext
-    │   ├── components/       # VoiceInput, ProgressBar, ReportUpload, DisclaimerBanner, etc.
-    │   ├── pages/            # Landing, Login, Register, KioskMode, Dashboard, DoctorPatientView
-    │   └── services/         # Axios API clients
+    └── src/
+        ├── i18n/                 # English, Hindi, Marathi dictionaries
+        ├── context/              # AuthContext, LanguageContext
+        ├── components/           # VoiceInput, ReportUpload, ProgressBar, DisclaimerBanner...
+        ├── pages/                # Landing, Login, Register, KioskMode, KioskConsultation,
+        │                         # Dashboards, DoctorPatientView, Reports, SafetyInfo...
+        └── services/             # Axios API clients
 ```
 
+### AI pipeline with graceful fallbacks
+Every AI feature has a fallback so the app never hard-fails:
+
+| Feature | Primary | Fallback |
+|---|---|---|
+| Follow-up questions | RAG retrieval + Gemini | Symptom-keyword rule questions |
+| Retrieval | Atlas `$vectorSearch` | In-memory cosine similarity |
+| Embeddings | Gemini `text-embedding-004` | Deterministic hashed vector |
+| Summary / extraction | Gemini refinement | Rule-based extraction and summary |
+| OTP delivery | Twilio SMS | Simulated, console-logged OTP |
+| OCR | Tesseract on preprocessed image | "Failed" status + manual correction |
+
 ---
 
-## 🛡️ Privacy & Security Features
-- **Authentication**: JWT bearer token authentication with role-based route guards (`patient`, `doctor`).
-- **Password Security**: Passwords hashed using bcryptjs (salt rounds: 10) and excluded from all API responses.
-- **Audit Logging**: Sensitive patient record accesses, consultations, and report uploads are logged in `AuditLog`.
-- **File Validation**: Strict file type whitelisting (PDF, JPG, JPEG, PNG) with a 15MB size ceiling.
-- **Kiosk Privacy**: Kiosk sessions automatically reset on completion or idle timeout to ensure subsequent patients cannot view prior data.
+## Main API Endpoints (overview)
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/auth/register`, `/login`, `GET /api/auth/me` | Email/password auth |
+| `POST /api/auth/abha/request-otp`, `/abha/verify-otp` | ABHA login via ABDM sandbox |
+| `POST /api/ai/follow-up` | RAG-grounded follow-up questions (auth required) |
+| `POST /api/ai/extract`, `/api/ai/summarize` | Entity extraction and summary |
+| `/api/consultations` | Create/update consultations (runs red-flag detection) |
+| `/api/reports` | Upload, OCR, and correct reports |
+| `GET /api/doctors/stats`, `/consultations` | Dashboard and queue (red-flag first) |
+| `POST /api/doctors/patients/:id/request-access`, `/verify-access` | OTP access gate |
+| `GET /api/doctors/patients/:id/...` | Patient record (requires `x-patient-access-token`) |
+| `PUT /api/doctors/consultations/:id/summary` | Doctor edits AI summary |
+| `POST /api/doctors/consultations/:id/review` | Add notes and mark reviewed |
 
 ---
 
-## 📜 License & Clinical Disclaimer
-MediKiosk is designed as an educational, demonstration, and clinical assistance prototype. It does not replace certified clinical judgment, emergency medical triage, or qualified diagnostic consultations.
+## Privacy & Security
+
+- **Authentication:** JWT bearer tokens with role-based route guards (patient, doctor).
+- **Passwords:** hashed with `bcryptjs` (10 salt rounds) and excluded from all API responses.
+- **Consent-based record access:** doctors need a patient-phone OTP and a short-lived, patient-scoped access token for each record.
+- **Audit logging:** record access, OTP requests/grants/denials, consultations, reviews, and uploads.
+- **Protected AI routes:** all `/api/ai/*` endpoints require authentication.
+- **File validation:** PDF, JPG, JPEG, PNG only, 15 MB limit.
+- **Kiosk privacy:** sessions reset on completion or idle timeout.
+- **Secrets:** all credentials live in `server/.env`, which is git-ignored. Set them as environment variables on the hosting platform when deploying.
+- **Production note:** the test-only `devOtp` field is returned only when `NODE_ENV` is not `production`.
+
+---
+
+## Scope & Limitations
+
+- **ABDM integration is limited to Milestone 1** (ABHA creation/login against the sandbox). HIS integration, FHIR record exchange, and ABDM certification are out of scope and listed as future work.
+- Doctor registration is self-service (no medical-council license verification) to keep the prototype simple.
+- Handwritten prescription OCR is not reliable with Tesseract; unclear scans fall back to manual patient correction.
+- Browser speech recognition requires Chrome/Edge and an internet connection.
+- Intended as an educational and demonstration prototype, not a certified clinical system.
+
+## Future Work
+- FHIR-based record push to HIS and ABDM consent-manager flows (M2/M3)
+- Doctor verification via the National Medical Register
+- Whisper-based or Bhashini ASR for more Indian languages and offline use
+- Handwriting-capable OCR
+- AYUSH (Ayurvedic) history mode
+- Docker packaging and cloud deployment
+
+---
+
+## License & Clinical Disclaimer
+MediKiosk is an educational, demonstration, and clinical-assistance prototype. It does not replace certified clinical judgment, emergency medical triage, or qualified diagnostic consultations.
