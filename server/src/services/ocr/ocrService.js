@@ -17,7 +17,7 @@ const CLINICAL_PATTERNS = [
   {
     name: 'WBC (Total Leukocyte Count)',
     unit: '/µL',
-    pattern: /(?:total\s+leukocyte\s+count|wbc|white\s+blood\s+cells?|tlc)\s*[:=\-]?\s*([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+(?:\.[0-9]+)?)\s*(?:\/µl|\/cumm|\/ul)?/i,
+    pattern: /(?:total\s+leukocyte\s+count|wbc|white\s+blood\s+cells?|tlc)\s*[:=\-]?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+(?:\.[0-9]+)?)\s*(?:\/µl|\/cumm|\/ul)?/i,
     minNormal: 4000,
     maxNormal: 11000,
     referenceRange: '4,000 - 11,000 /µL',
@@ -25,7 +25,7 @@ const CLINICAL_PATTERNS = [
   {
     name: 'Platelet Count',
     unit: '/µL',
-    pattern: /(?:platelets?|plt|platelet\s+count)\s*[:=\-]?\s*([0-9]+(?:\.[0-9]+)?(?:\s*lakh)?|[0-9]{1,3}(?:,[0-9]{3})*)\s*(?:\/µl|\/cumm|\/ul)?/i,
+    pattern: /(?:platelets?|plt|platelet\s+count)\s*[:=\-]?\s*([0-9]{1,3}(?:,[0-9]{2,3})+|[0-9]+(?:\.[0-9]+)?(?:\s*lakh)?)\s*(?:\/µl|\/cumm|\/ul)?/i,
     minNormal: 150000,
     maxNormal: 450000,
     referenceRange: '150,000 - 450,000 /µL',
@@ -154,6 +154,44 @@ const parseClinicalFindingsFromText = (rawText) => {
 /**
  * Primary OCR & extraction runner
  */
+
+/**
+ * Runs Tesseract OCR safely. A failure to load language data (offline, slow network)
+ * becomes a normal rejected promise instead of an uncaught exception that would
+ * crash the whole Node server. Set OCR_LANG_PATH to a folder containing eng.traineddata
+ * to run fully offline.
+ */
+async function runTesseract(input, timeoutMs = 90000) {
+  const Tesseract = require('tesseract.js');
+  let worker;
+  const work = new Promise((resolve, reject) => {
+    (async () => {
+      try {
+        const opts = {
+          errorHandler: (err) => reject(err instanceof Error ? err : new Error(String(err))),
+        };
+        if (process.env.OCR_LANG_PATH) {
+          opts.langPath = process.env.OCR_LANG_PATH;
+          opts.gzip = false;
+        }
+        worker = await Tesseract.createWorker('eng', 1, opts);
+        const { data } = await worker.recognize(input);
+        resolve(data?.text || '');
+      } catch (e) {
+        reject(e);
+      }
+    })();
+  });
+  const timer = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('OCR timed out')), timeoutMs)
+  );
+  try {
+    return await Promise.race([work, timer]);
+  } finally {
+    try { if (worker) await worker.terminate(); } catch (_) { /* ignore */ }
+  }
+}
+
 const extractTextAndData = async (filePath, originalName) => {
   const ext = path.extname(originalName).toLowerCase();
   let extractedText = '';
@@ -179,9 +217,7 @@ const extractTextAndData = async (filePath, originalName) => {
         inputForOcr = filePath;
       }
 
-      const Tesseract = require('tesseract.js');
-      const { data } = await Tesseract.recognize(inputForOcr, 'eng');
-      extractedText = data?.text || '';
+      extractedText = await runTesseract(inputForOcr);
     }
 
     const lower = (extractedText + ' ' + originalName).toLowerCase();

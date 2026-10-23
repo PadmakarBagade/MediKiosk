@@ -1,7 +1,8 @@
-﻿require('dotenv').config();
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const connectDB = require('./config/db');
 const errorHandler = require('./middleware/errorMiddleware');
 
@@ -47,6 +48,18 @@ app.use('/api/doctors', doctorRoutes);
 app.use('/api/consultations', consultationRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/ai', aiRoutes);
+
+// Serve the built React app (single-service deployment).
+// When client/dist exists (after `npm run build:client`), the same server serves the UI and the API,
+// so the frontend's relative '/api' calls work with no CORS or proxy setup.
+const clientDist = path.join(__dirname, '../../client/dist');
+if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+  app.use(express.static(clientDist));
+  app.get(/^\/(?!api|uploads).*/, (req, res) => {
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+  console.log('[MediKiosk Server] Serving React build from client/dist');
+}
 
 // Centralized error handling
 app.use(errorHandler);

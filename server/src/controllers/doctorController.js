@@ -155,7 +155,7 @@ const requestPatientAccess = async (req, res, next) => {
       message: result.message,
       expiresAt: result.expiresAt,
       simulated: result.simulated,
-      devOtp: result.devOtp, // Expose in non-production for evaluator testing
+      ...((process.env.NODE_ENV !== 'production' || process.env.SHOW_DEV_OTP === 'true') && { devOtp: result.devOtp }),
     });
   } catch (err) {
     next(err);
